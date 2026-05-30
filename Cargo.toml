@@ -1,0 +1,4 @@
+[workspace]
+members = ["color-wasm", "color-lib", "color-cli"]
+resolver = "3"
+
