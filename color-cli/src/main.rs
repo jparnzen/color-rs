@@ -1,3 +1,6 @@
+// Copyright © 2026 John P. ARNZEN
+// SPDX-License-Identifier: MIT
+
 use anyhow::Result;
 use clap::{Arg, command};
 use color_lib::{Color, OKLAB, OKLCH, OKLrAB, OKLrCH, SRGB, Vector3, XYZD65};
@@ -94,38 +97,39 @@ impl CliColor {
 
 impl Display for CliColor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        const SIGDIG: i32 = 5;
         match self {
             CliColor::SRGB(color) => {
-                let [r, g, b] = color.coords;
+                let [r, g, b] = color.coords.map(|v| round_to_significant(v, SIGDIG));
                 write!(
                     f,
-                    "rgb({r:.5} {g:.5} {b:.5}) || #{:02x}{:02x}{:02x}",
+                    "rgb({r} {g} {b}) || #{:02x}{:02x}{:02x}",
                     (r.clamp(0., 1.) * 255.).round() as u8,
                     (g.clamp(0., 1.) * 255.).round() as u8,
                     (b.clamp(0., 1.) * 255.).round() as u8
                 )
             }
             CliColor::OKLAB(color) => {
-                let [l, a, b] = color.coords;
-                write!(f, "oklab({l:.5} {a:.5} {b:.5})")
+                let [l, a, b] = color.coords.map(|v| round_to_significant(v, SIGDIG));
+                write!(f, "oklab({l} {a} {b})")
             }
             CliColor::OKLCH(color) => {
-                let [l, c, h] = color.coords;
-                write!(f, "oklch({l:.5} {c:.5} {h:.5})")
+                let [l, c, h] = color.coords.map(|v| round_to_significant(v, SIGDIG));
+                write!(f, "oklch({l} {c} {h})")
             }
             CliColor::OKLrAB(color) => {
-                let [lr, a, b] = color.coords;
-                write!(f, "color(--oklrab {lr:.5} {a:.5} {b:.5})")
+                let [lr, a, b] = color.coords.map(|v| round_to_significant(v, SIGDIG));
+                write!(f, "color(--oklrab {lr} {a} {b})")
             }
             CliColor::OKLrCH(color) => {
-                let [lr, c, h] = color.coords;
-                write!(f, "color(--oklrch {lr:.5} {c:.5} {h:.5})")
+                let [lr, c, h] = color.coords.map(|v| round_to_significant(v, SIGDIG));
+                write!(f, "color(--oklrch {lr} {c} {h})")
             }
         }
     }
 }
 
-#[derive(Clone, Debug, clap::ValueEnum)]
+#[derive(Clone, Debug, PartialEq, clap::ValueEnum)]
 enum OutputFormat {
     Rgb,
     Oklch,
@@ -174,14 +178,21 @@ fn main() -> Result<()> {
         parse_color_string(color_string)?
     };
 
-    let gma_color = match matches.get_one::<GamutMapAlgo>("gma") {
-        Some(GamutMapAlgo::Clip) => input_color.clip(),
-        Some(GamutMapAlgo::Minde) => input_color.gamutmap_minde(),
-        Some(GamutMapAlgo::Raytrace) => input_color.gamutmap_raytrace(),
-        None => input_color,
+    let dest_color = input_color.convert_to(dest_format);
+
+    let (gma_color, gma_applied) = match matches.get_one::<GamutMapAlgo>("gma") {
+        Some(GamutMapAlgo::Clip) => (dest_color.clip(), true),
+        Some(GamutMapAlgo::Minde) => (dest_color.gamutmap_minde(), true),
+        Some(GamutMapAlgo::Raytrace) => (dest_color.gamutmap_raytrace(), true),
+        None => (dest_color, false),
     };
 
-    let output_color = gma_color.convert_to(dest_format);
+    // Prevent doing double-conversions to the same output/dest format
+    let output_color = if gma_applied && dest_format != &OutputFormat::Rgb {
+        gma_color.convert_to(dest_format)
+    } else {
+        gma_color
+    };
 
     if let CliColor::SRGB(color) = &output_color
         && !color.in_gamut::<SRGB>()
@@ -268,6 +279,15 @@ fn parse_values(s: &str) -> Result<Vector3, CliError> {
 
     let parse = |s: &str| s.parse::<f64>().map_err(CliError::ParseFloatError);
     Ok([parse(vals[0])?, parse(vals[1])?, parse(vals[2])?])
+}
+
+// Tweaked from Google Gemini code re: rust get significant digits
+fn round_to_significant(value: f64, digits: i32) -> f64 {
+    if value == 0. {
+        return 0.;
+    }
+    let multiplier = 10.0_f64.powi(digits - ((value.abs().log10().floor() as i32) + 1));
+    (value * multiplier).round() / multiplier
 }
 
 #[cfg(test)]
@@ -361,6 +381,6 @@ mod tests {
         let src = "oklch(0.5 0.5 110)";
         let color = parse_color_string(src).unwrap();
         let output_string = format!("{color}");
-        assert_eq!(output_string, "oklch(0.50000 0.50000 110.00000)");
+        assert_eq!(output_string, src);
     }
 }
