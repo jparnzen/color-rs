@@ -4,7 +4,7 @@ A Cargo workspace implementing CSS Color 4 color science in Rust — a pure libr
 
 ## Origin
 
-color-rs grew from [color-wasm](LINK-TO-COLOR-WASM), an earlier single-crate implementation combining the core color library with WASM bindings. As the project expanded to include a CLI tool, the single-crate structure became limiting — a CLI binary shouldn't carry wasm-bindgen as a dependency. The workspace refactor separates these concerns cleanly while keeping the same color science at the core.
+color-rs grew from [color-wasm](https://github.com/jparnzen/color-wasm), an earlier single-crate implementation combining the core color library with WASM bindings. As the project expanded to include a CLI tool, the single-crate structure became limiting — a CLI binary shouldn't carry wasm-bindgen as a dependency. The workspace refactor separates these concerns cleanly while keeping the same color science at the core.
 
 ## Workspace structure
 
@@ -48,7 +48,7 @@ wasm-pack build
 
 ## color-cli
 
-A command-line tool for color conversion and gamut mapping. Built because checking color values and gamut mapping behavior from the command line is faster than loading a library in a Node or Python REPL every time — the same motivation behind the [color-palette-explorer](LINK-TO-PALETTE-EXPLORER) and the [Firefox gamut mapping contribution](https://bugzilla.mozilla.org/show_bug.cgi?id=1847503).
+A command-line tool for color conversion and gamut mapping. Built because checking color values and gamut mapping behavior from the command line is faster than loading a library in a Node or Python REPL every time — the same motivation behind the [color-palette-explorer](https://github.com/jparnzen/color-palette-explorer) and the [Firefox gamut mapping contribution](https://bugzilla.mozilla.org/show_bug.cgi?id=1847503).
 
 ```
 USAGE:
