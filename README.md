@@ -90,7 +90,7 @@ cargo install --path color-cli
 Requires Rust (edition 2024). Clone the repository and build all crates:
 
 ```bash
-git clone REPO-URL
+git clone https://github.com/jparnzen/color-rs
 cd color-rs
 cargo build
 cargo test
