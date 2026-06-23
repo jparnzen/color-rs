@@ -1,9 +1,11 @@
 // Copyright © 2026 John P. ARNZEN
 // SPDX-License-Identifier: MIT
+mod lexparse;
 
 use anyhow::Result;
 use clap::{Arg, command};
 use color_lib::{Color, OKLAB, OKLCH, OKLrAB, OKLrCH, SRGB, Vector3, XYZD65};
+use lexparse::*;
 use std::collections::VecDeque;
 use std::fmt::Display;
 
