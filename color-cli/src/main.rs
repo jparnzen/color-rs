@@ -1,5 +1,6 @@
 // Copyright © 2026 John P. ARNZEN
 // SPDX-License-Identifier: MIT
+
 mod lexparse;
 
 use anyhow::Result;

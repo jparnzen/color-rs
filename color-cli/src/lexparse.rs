@@ -227,6 +227,12 @@ fn parse_tokens(tokens: &[Token]) -> Result<CliColor, CliError> {
     Parser::new(tokens).parse_color()
 }
 
+pub(crate) fn parse_color_string(color_string: &str) -> Result<CliColor, CliError> {
+    Lexer::new(color_string)
+        .collect::<Result<Vec<Token>, CliError>>()
+        .and_then(|tokens| parse_tokens(&tokens))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,10 +351,7 @@ mod tests {
     #[test]
     fn test_parser_rgb_func() {
         let src = "rgb(10% 128 10)";
-        let tokens = Lexer::new(src)
-            .collect::<Result<Vec<Token>, CliError>>()
-            .unwrap();
-        let color = parse_tokens(&tokens).expect("expected parseable color string");
+        let color = parse_color_string(src).expect("color string should be parseable");
         let CliColor::SRGB(srgb_color) = color else {
             panic!("Expected an sRGB color; got something else.");
         };
@@ -359,10 +362,7 @@ mod tests {
     #[test]
     fn test_parser_color_srgb() {
         let src = "color(srgb 1 .5 .25)";
-        let tokens = Lexer::new(src)
-            .collect::<Result<Vec<Token>, CliError>>()
-            .unwrap();
-        let color = parse_tokens(&tokens).expect("expected parseable color string");
+        let color = parse_color_string(src).expect("color string should be parseable");
         let CliColor::SRGB(srgb_color) = color else {
             panic!("Expected an sRGB color; got something else.");
         };
@@ -370,7 +370,73 @@ mod tests {
         assert_eq!(srgb_color.coords, expected);
     }
 
-    // from Claude Code when asking about good code coverage
+    #[test]
+    fn test_parser_oklab_func() {
+        let src = "oklab(0.5 0.2 -0.2)";
+        let color = parse_color_string(src).expect("color string should be parseable");
+        let CliColor::OKLAB(oklab_color) = color else {
+            panic!("Expected an OKLAB color; got something else.");
+        };
+        let expected = [0.5, 0.2, -0.2];
+        assert_eq!(oklab_color.coords, expected);
+    }
+
+    #[test]
+    fn test_parser_oklch_func() {
+        let src = "oklch(0.5 0.4 110)";
+        let color = parse_color_string(src).expect("color string should be parseable");
+        let CliColor::OKLCH(oklch_color) = color else {
+            panic!("Expected an OKLCH color; got something else.");
+        };
+        let expected = [0.5, 0.4, 110.];
+        assert_eq!(oklch_color.coords, expected);
+    }
+
+    #[test]
+    fn test_parser_color_oklrab() {
+        let src = "color(--oklrab 0.05 0.2 -0.2)";
+        let color = parse_color_string(src).expect("color string should be parseable");
+        let CliColor::OKLrAB(lrab_color) = color else {
+            panic!("Expected an OKLrAB color; got something else.");
+        };
+        let expected = [0.05, 0.2, -0.2];
+        assert_eq!(lrab_color.coords, expected);
+    }
+
+    #[test]
+    fn test_parser_color_oklrch() {
+        let src = "color(--oklrch 0.05 0.4 110)";
+        let color = parse_color_string(src).expect("color string should be parseable");
+        let CliColor::OKLrCH(lrch_color) = color else {
+            panic!("Expected an OKLrCH color; got something else.");
+        };
+        let expected = [0.05, 0.4, 110.];
+        assert_eq!(lrch_color.coords, expected);
+    }
+
+    #[test]
+    fn test_parser_color_oklab() {
+        let src = "color(--oklab .5 .2 -.2)";
+        let color = parse_color_string(src).expect("color string should be parseable");
+        let CliColor::OKLAB(oklab_color) = color else {
+            panic!("Expected an OKLAB color; got something else.");
+        };
+        let expected = [0.5, 0.2, -0.2];
+        assert_eq!(oklab_color.coords, expected);
+    }
+
+    #[test]
+    fn test_parser_color_oklch() {
+        let src = "color(--oklch .5 .4 110)";
+        let color = parse_color_string(src).expect("color string should be parseable");
+        let CliColor::OKLCH(oklch_color) = color else {
+            panic!("Expected an OKLCH color; got something else.");
+        };
+        let expected = [0.5, 0.4, 110.];
+        assert_eq!(oklch_color.coords, expected);
+    }
+
+    // from Claude Code when asked about good code coverage
     #[test]
     fn test_invalid_inputs_are_rejected() {
         let invalid_inputs = [
@@ -387,9 +453,7 @@ mod tests {
             "color(srgb 50% 0.5 0.2)",
         ];
         for input in invalid_inputs {
-            let result = Lexer::new(input)
-                .collect::<Result<Vec<Token>, CliError>>()
-                .and_then(|tokens| parse_tokens(&tokens));
+            let result = parse_color_string(input);
             assert!(result.is_err(), "expected an error for input: {input:?}");
         }
     }
