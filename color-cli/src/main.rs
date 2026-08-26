@@ -235,7 +235,7 @@ fn parse_rgbhex(hex_str: &str) -> Result<CliColor, CliError> {
 /// color(--oklrch lr c h)
 /// color(--oklrab lr a b)
 fn parse_color_string(color_string: &str) -> Result<CliColor, CliError> {
-    let make: fn(Vector3) -> CliColor =
+    let make_color: fn(Vector3) -> CliColor =
         if color_string.starts_with("rgb(") || color_string.starts_with("color(srgb ") {
             |v| CliColor::SRGB(Color::<SRGB>::new(v))
         } else if color_string.starts_with("oklch(") || color_string.starts_with("color(--oklch ") {
@@ -250,7 +250,7 @@ fn parse_color_string(color_string: &str) -> Result<CliColor, CliError> {
             return Err(CliError::ColorError);
         };
 
-    Ok(make(parse_values(color_string)?))
+    Ok(make_color(parse_values(color_string)?))
 }
 
 /// Parse the f64 values between parentheses, returning the first 3 f64s found.

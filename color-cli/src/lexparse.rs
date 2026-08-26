@@ -3,8 +3,52 @@
 
 use std::{iter::Peekable, str::Chars};
 
-use crate::{CliColor, CliError};
+use crate::CliColor;
 use color_lib::{Color, OKLAB, OKLCH, OKLrAB, OKLrCH, SRGB, Vector3};
+
+#[derive(Debug)]
+pub(crate) enum LexParseError {
+    LexUnknownChar(char),
+    LexInvalidNumber(std::num::ParseFloatError),
+    LexEmptyIdentifier,
+    LexUnexpectedChar(char),
+    LexUnexpectedEndOfInput,
+    ParseUnexpectedToken { expected: &'static str },
+    ParseUnknownFunction(String),
+    ParseUnknownColorSpace(String),
+    ParseUnexpectedEndOfInput { expected: &'static str },
+    ParseTrailingTokens,
+}
+
+impl std::error::Error for LexParseError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::LexInvalidNumber(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for LexParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LexUnknownChar(c) => write!(f, "unknown character: {c:?}"),
+            Self::LexInvalidNumber(_) => write!(f, "invalid number"),
+            Self::LexEmptyIdentifier => write!(f, "empty identifier"),
+            Self::LexUnexpectedChar(c) => write!(f, "unexpected character: {c:?}"),
+            Self::LexUnexpectedEndOfInput => write!(f, "unexpected end of input"),
+            Self::ParseUnexpectedToken { expected } => {
+                write!(f, "unexpected token; expected: {expected}")
+            }
+            Self::ParseUnknownFunction(s) => write!(f, "unknown function: {s}"),
+            Self::ParseUnknownColorSpace(s) => write!(f, "unknown color space: {s}"),
+            Self::ParseUnexpectedEndOfInput { expected } => {
+                write!(f, "unexpected end of input; expected: {expected}")
+            }
+            Self::ParseTrailingTokens => write!(f, "trailing tokens after function call"),
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Clone)]
 enum Token {
@@ -26,7 +70,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn next_token(&mut self) -> Result<Option<Token>, CliError> {
+    fn next_token(&mut self) -> Result<Option<Token>, LexParseError> {
         // skip whitespace and commas in all functions--diverges from CSS
         while self
             .chars
@@ -56,21 +100,21 @@ impl<'a> Lexer<'a> {
                 self.lex_number().map(|n| Some(Token::Number(n)))
             }
             c if c.is_ascii_alphabetic() => self.lex_ident().map(|s| Some(Token::Ident(s))),
-            _ => Err(CliError::ParseError),
+            c => Err(LexParseError::LexUnknownChar(c)),
         }
     }
 
-    fn lex_number(&mut self) -> Result<f64, CliError> {
+    fn lex_number(&mut self) -> Result<f64, LexParseError> {
         let mut buf = String::new();
 
         while let Some(c) = self.chars.next_if(|c| c.is_ascii_digit() || *c == '.') {
             buf.push(c);
         }
 
-        buf.parse::<f64>().map_err(|_| CliError::ParseError)
+        buf.parse::<f64>().map_err(LexParseError::LexInvalidNumber)
     }
 
-    fn lex_ident(&mut self) -> Result<String, CliError> {
+    fn lex_ident(&mut self) -> Result<String, LexParseError> {
         let mut result = String::new();
 
         while let Some(c) = self
@@ -81,13 +125,13 @@ impl<'a> Lexer<'a> {
         }
 
         if result.is_empty() {
-            Err(CliError::ParseError)
+            Err(LexParseError::LexEmptyIdentifier)
         } else {
             Ok(result)
         }
     }
 
-    fn lex_dash(&mut self) -> Result<Token, CliError> {
+    fn lex_dash(&mut self) -> Result<Token, LexParseError> {
         // consume the triggering dash
         self.chars.next();
 
@@ -108,13 +152,14 @@ impl<'a> Lexer<'a> {
                 Ok(Token::Number(-num))
             }
             // nothing else allowed
-            _ => Err(CliError::ParseError),
+            Some(c) => Err(LexParseError::LexUnexpectedChar(c)),
+            None => Err(LexParseError::LexUnexpectedEndOfInput),
         }
     }
 }
 
 impl<'a> Iterator for Lexer<'a> {
-    type Item = Result<Token, CliError>;
+    type Item = Result<Token, LexParseError>;
     fn next(&mut self) -> Option<Self::Item> {
         match self.next_token() {
             Ok(Some(token)) => Some(Ok(token)),
@@ -146,15 +191,25 @@ impl<'t> Parser<'t> {
         t
     }
 
-    fn parse_color(&mut self) -> Result<CliColor, CliError> {
-        // parse ID '(' ID? NUM NUM NUM ')'
-        let Some(Token::Ident(func_name)) = self.advance() else {
-            return Err(CliError::ParseError);
-        };
+    // Parse CSS-style color function syntax into a CliColor.
+    // Accepts color coordinates only, no alpha channel.
+    //
+    // color_func_spec: legacy_rgb_func | ok_func | color_func
+    //
+    // legacy_rgb_func: ID("rgb") '(' legacy_rgb_coord{3} ')'
+    // ok_func: ID("oklch" | "oklab") '(' color_coord{3} ')'
+    // color_func: ID("color") '(' color_space color_coord{3} ')'
+    //
+    // legacy_rgb_coord: percent_value | NUM
+    // percent_value: NUM '%'
+    // color_coord: NUM
+    //
+    // color_space: ID ("srgb" | "--oklch" | "--oklab" | "--oklrch" | "--oklrab")
+    fn parse_color(&mut self) -> Result<CliColor, LexParseError> {
+        // parse general form: ID '(' ID? NUM NUM NUM ')'
+        let func_name = self.expect_ident("a function name")?;
 
-        let Some(Token::LParen) = self.advance() else {
-            return Err(CliError::ParseError);
-        };
+        self.expect_symbol(&Token::LParen, "'('")?;
 
         let color = match func_name.as_str() {
             "rgb" => {
@@ -167,46 +222,33 @@ impl<'t> Parser<'t> {
             "oklch" => CliColor::OKLCH(Color::<OKLCH>::new(self.parse_coords()?)),
             "oklab" => CliColor::OKLAB(Color::<OKLAB>::new(self.parse_coords()?)),
             "color" => {
-                let Some(Token::Ident(color_space)) = self.advance() else {
-                    return Err(CliError::ParseError);
+                let color_space = self.expect_ident("a color space name")?;
+
+                let make_color: fn(Vector3) -> CliColor = match color_space.as_str() {
+                    "srgb" => |v| CliColor::SRGB(Color::<SRGB>::new(v)),
+                    "--oklch" => |v| CliColor::OKLCH(Color::<OKLCH>::new(v)),
+                    "--oklab" => |v| CliColor::OKLAB(Color::<OKLAB>::new(v)),
+                    "--oklrch" => |v| CliColor::OKLrCH(Color::<OKLrCH>::new(v)),
+                    "--oklrab" => |v| CliColor::OKLrAB(Color::<OKLrAB>::new(v)),
+                    _ => return Err(LexParseError::ParseUnknownColorSpace(color_space)),
                 };
-                let coords = self.parse_coords()?;
-                match color_space.as_str() {
-                    "srgb" => CliColor::SRGB(Color::<SRGB>::new(coords)),
-                    "--oklch" => CliColor::OKLCH(Color::<OKLCH>::new(coords)),
-                    "--oklab" => CliColor::OKLAB(Color::<OKLAB>::new(coords)),
-                    "--oklrch" => CliColor::OKLrCH(Color::<OKLrCH>::new(coords)),
-                    "--oklrab" => CliColor::OKLrAB(Color::<OKLrAB>::new(coords)),
-                    _ => return Err(CliError::ParseError),
-                }
+                make_color(self.parse_coords()?)
             }
-            _ => return Err(CliError::ParseError),
+            _ => return Err(LexParseError::ParseUnknownFunction(func_name)),
         };
 
-        let Some(Token::RParen) = self.advance() else {
-            return Err(CliError::ParseError);
-        };
+        self.expect_symbol(&Token::RParen, "')'")?;
 
         // if there's anything after the right paren, that's a parse error
         if self.peek().is_some() {
-            return Err(CliError::ParseError);
+            return Err(LexParseError::ParseTrailingTokens);
         }
 
         Ok(color)
     }
 
-    fn parse_coords(&mut self) -> Result<Vector3, CliError> {
-        let mut coords = [0.; 3];
-        for c in &mut coords {
-            *c = self.parse_float_value()?;
-        }
-        Ok(coords)
-    }
-
-    fn parse_rgb_value(&mut self) -> Result<f64, CliError> {
-        let Some(Token::Number(val)) = self.advance() else {
-            return Err(CliError::ParseError);
-        };
+    fn parse_rgb_value(&mut self) -> Result<f64, LexParseError> {
+        let val = self.expect_number("a number")?;
         if self.peek() == Some(&Token::Percent) {
             self.advance();
             Ok(val / 100.)
@@ -215,45 +257,54 @@ impl<'t> Parser<'t> {
         }
     }
 
-    fn parse_float_value(&mut self) -> Result<f64, CliError> {
-        let Some(Token::Number(val)) = self.advance() else {
-            return Err(CliError::ParseError);
-        };
-        Ok(val)
+    fn parse_coords(&mut self) -> Result<Vector3, LexParseError> {
+        let mut coords = [0.; 3];
+        for c in &mut coords {
+            *c = self.expect_number("a number")?;
+        }
+        Ok(coords)
+    }
+
+    fn expect_ident(&mut self, expected: &'static str) -> Result<String, LexParseError> {
+        match self.advance() {
+            Some(Token::Ident(ident)) => Ok(ident),
+            Some(_) => Err(LexParseError::ParseUnexpectedToken { expected }),
+            None => Err(LexParseError::ParseUnexpectedEndOfInput { expected }),
+        }
+    }
+
+    fn expect_number(&mut self, expected: &'static str) -> Result<f64, LexParseError> {
+        match self.advance() {
+            Some(Token::Number(num)) => Ok(num),
+            Some(_) => Err(LexParseError::ParseUnexpectedToken { expected }),
+            None => Err(LexParseError::ParseUnexpectedEndOfInput { expected }),
+        }
+    }
+
+    fn expect_symbol(&mut self, want: &Token, expected: &'static str) -> Result<(), LexParseError> {
+        match self.advance() {
+            Some(sym) if sym == *want => Ok(()),
+            Some(_) => Err(LexParseError::ParseUnexpectedToken { expected }),
+            None => Err(LexParseError::ParseUnexpectedEndOfInput { expected }),
+        }
     }
 }
 
-fn parse_tokens(tokens: &[Token]) -> Result<CliColor, CliError> {
-    Parser::new(tokens).parse_color()
-}
-
-pub(crate) fn parse_color_string(color_string: &str) -> Result<CliColor, CliError> {
+pub(crate) fn parse_color_string(color_string: &str) -> Result<CliColor, LexParseError> {
     Lexer::new(color_string)
-        .collect::<Result<Vec<Token>, CliError>>()
-        .and_then(|tokens| parse_tokens(&tokens))
+        .collect::<Result<Vec<Token>, LexParseError>>()
+        .and_then(|tokens| Parser::new(&tokens).parse_color())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Acceptable color strings:
-    // rgb(254, 100%, 50%)
-    // rgb(100%, 90%, 80)
-    // rgb(1 2 3)
-    // oklch(.90 .2 20)
-    // oklab(0.80 0.3 -.2)
-    // color(srgb 0.9 .5 .2)
-    // color(--oklch .90 .2 20)
-    // color(--oklab .80 .3 -0.2)
-    // color(--oklrch 0.02 .2 240.2)
-    // color(--oklrab 0.01 .2 -0.3)
-
     #[test]
     fn test_lexer_rgb_function() {
         let src = "rgb(100% 128 50%)";
         let tokens = Lexer::new(src)
-            .collect::<Result<Vec<Token>, CliError>>()
+            .collect::<Result<Vec<Token>, LexParseError>>()
             .unwrap();
         assert_eq!(
             tokens,
@@ -274,7 +325,7 @@ mod tests {
     fn test_lexer_color_srgb_function() {
         let src = "color(srgb 1.0 0.5 0.2)";
         let tokens = Lexer::new(src)
-            .collect::<Result<Vec<Token>, CliError>>()
+            .collect::<Result<Vec<Token>, LexParseError>>()
             .unwrap();
         assert_eq!(
             tokens,
@@ -294,7 +345,7 @@ mod tests {
     fn test_lexer_color_oklch_function() {
         let src = "color(--oklch .99 .2 20)";
         let tokens = Lexer::new(src)
-            .collect::<Result<Vec<Token>, CliError>>()
+            .collect::<Result<Vec<Token>, LexParseError>>()
             .unwrap();
         assert_eq!(
             tokens,
@@ -314,7 +365,7 @@ mod tests {
     fn test_lexer_oklab_with_negative_value() {
         let src = "oklab(.80 .2 -.3)";
         let tokens = Lexer::new(src)
-            .collect::<Result<Vec<Token>, CliError>>()
+            .collect::<Result<Vec<Token>, LexParseError>>()
             .unwrap();
         assert_eq!(
             tokens,
@@ -333,7 +384,7 @@ mod tests {
     fn test_lexer_rgb_with_commas() {
         let src = "rgb(10, 20, 30)";
         let tokens = Lexer::new(src)
-            .collect::<Result<Vec<Token>, CliError>>()
+            .collect::<Result<Vec<Token>, LexParseError>>()
             .unwrap();
         assert_eq!(
             tokens,
@@ -436,25 +487,82 @@ mod tests {
         assert_eq!(oklch_color.coords, expected);
     }
 
-    // from Claude Code when asked about good code coverage
+    // from Claude Code when asked about ensuring good code coverage
     #[test]
     fn test_invalid_inputs_are_rejected() {
-        let invalid_inputs = [
-            "oklch(0.5 0.2 @)",
-            "oklch(0.5 1.2.3 110)",
-            "oklch(0.5 0.2 -",
-            "color(-- 1 2 3)",
-            "hsl(1 2 3)",
-            "color(foo 1 2 3)",
-            "oklch(0.5 0.2)",
-            "oklch(0.5 0.2 110",
-            "oklch(0.5 0.2 110) junk",
-            "",
-            "color(srgb 50% 0.5 0.2)",
+        type ErrorPredicate = fn(&LexParseError) -> bool;
+        let invalid_inputs: [(&str, ErrorPredicate); 12] = [
+            ("oklch(0.5 0.2 @)", |e| {
+                matches!(e, LexParseError::LexUnknownChar('@'))
+            }),
+            ("oklch(0.5 0.2 -x)", |e| {
+                matches!(e, LexParseError::LexUnexpectedChar('x'))
+            }),
+            ("oklch(0.5 1.2.3 110)", |e| {
+                matches!(e, LexParseError::LexInvalidNumber(_))
+            }),
+            ("oklch(0.5 0.2 -", |e| {
+                matches!(e, LexParseError::LexUnexpectedEndOfInput)
+            }),
+            ("color(-- 1 2 3)", |e| {
+                matches!(e, LexParseError::LexEmptyIdentifier)
+            }),
+            (
+                "hsl(1 2 3)",
+                |e| matches!(e, LexParseError::ParseUnknownFunction(s) if s == "hsl"),
+            ),
+            (
+                "color(foo 1 2 3)",
+                |e| matches!(e, LexParseError::ParseUnknownColorSpace(s) if s == "foo"),
+            ),
+            ("oklch(0.5 0.2)", |e| {
+                matches!(
+                    e,
+                    LexParseError::ParseUnexpectedToken {
+                        expected: "a number"
+                    }
+                )
+            }),
+            ("oklch(0.5 0.2 110", |e| {
+                matches!(
+                    e,
+                    LexParseError::ParseUnexpectedEndOfInput { expected: "')'" }
+                )
+            }),
+            ("oklch(0.5 0.2 110) junk", |e| {
+                matches!(e, LexParseError::ParseTrailingTokens)
+            }),
+            ("", |e| {
+                matches!(
+                    e,
+                    LexParseError::ParseUnexpectedEndOfInput {
+                        expected: "a function name"
+                    }
+                )
+            }),
+            ("color(srgb 50% 0.5 0.2)", |e| {
+                matches!(
+                    e,
+                    LexParseError::ParseUnexpectedToken {
+                        expected: "a number"
+                    }
+                )
+            }),
         ];
-        for input in invalid_inputs {
-            let result = parse_color_string(input);
-            assert!(result.is_err(), "expected an error for input: {input:?}");
+
+        let mut mismatched_errors = vec![];
+        for (test_str, expect_pred) in invalid_inputs {
+            let Err(err_result) = parse_color_string(test_str) else {
+                panic!("test string {test_str:?} passed when it shouldn't have.")
+            };
+            if !expect_pred(&err_result) {
+                mismatched_errors.push((test_str, err_result));
+            }
         }
+        assert!(
+            mismatched_errors.is_empty(),
+            "tests failed with wrong error:\n{:#?}",
+            mismatched_errors
+        )
     }
 }
