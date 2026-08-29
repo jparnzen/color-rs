@@ -18,6 +18,7 @@ pub(crate) enum LexParseError {
     ParseUnknownColorSpace(String),
     ParseUnexpectedEndOfInput { expected: &'static str },
     ParseTrailingTokens,
+    ParseMismatchedRgbComponents,
 }
 
 impl std::error::Error for LexParseError {
@@ -46,6 +47,10 @@ impl std::fmt::Display for LexParseError {
                 write!(f, "unexpected end of input; expected: {expected}")
             }
             Self::ParseTrailingTokens => write!(f, "trailing tokens after function call"),
+            Self::ParseMismatchedRgbComponents => write!(
+                f,
+                "legacy rgb() must use all numbers or all percentages for its components"
+            ),
         }
     }
 }
@@ -54,9 +59,29 @@ impl std::fmt::Display for LexParseError {
 enum Token {
     Ident(String),
     Number(f64),
-    Percent,
+    Percentage(f64),
+    Comma,
     LParen,
     RParen,
+}
+
+#[derive(Debug)]
+enum RgbNumOrPercent {
+    Number(f64),
+    Percentage(f64),
+}
+
+impl RgbNumOrPercent {
+    fn norm_value(&self) -> f64 {
+        match self {
+            Self::Number(num) => num / 255.,
+            Self::Percentage(percent) => percent / 100.,
+        }
+    }
+
+    fn is_percentage(&self) -> bool {
+        matches!(self, Self::Percentage(_))
+    }
 }
 
 struct Lexer<'a> {
@@ -71,12 +96,8 @@ impl<'a> Lexer<'a> {
     }
 
     fn next_token(&mut self) -> Result<Option<Token>, LexParseError> {
-        // skip whitespace and commas in all functions--diverges from CSS
-        while self
-            .chars
-            .next_if(|c| c.is_whitespace() || *c == ',')
-            .is_some()
-        {}
+        // skip whitespace
+        while self.chars.next_if(|c| c.is_whitespace()).is_some() {}
 
         let Some(lexeme) = self.chars.peek().copied() else {
             return Ok(None);
@@ -91,17 +112,26 @@ impl<'a> Lexer<'a> {
                 self.chars.next();
                 Ok(Some(Token::RParen))
             }
-            '%' => {
+            ',' => {
                 self.chars.next();
-                Ok(Some(Token::Percent))
+                Ok(Some(Token::Comma))
             }
             '-' => self.lex_dash().map(Some),
             c if c.is_ascii_digit() || c == '.' => {
-                self.lex_number().map(|n| Some(Token::Number(n)))
+                let val = self.lex_number()?;
+                if self.take_percent() {
+                    Ok(Some(Token::Percentage(val)))
+                } else {
+                    Ok(Some(Token::Number(val)))
+                }
             }
             c if c.is_ascii_alphabetic() => self.lex_ident().map(|s| Some(Token::Ident(s))),
             c => Err(LexParseError::LexUnknownChar(c)),
         }
+    }
+
+    fn take_percent(&mut self) -> bool {
+        self.chars.next_if(|c| *c == '%').is_some()
     }
 
     fn lex_number(&mut self) -> Result<f64, LexParseError> {
@@ -149,7 +179,11 @@ impl<'a> Lexer<'a> {
             Some(c) if c.is_ascii_digit() || c == '.' => {
                 let num = self.lex_number()?;
                 // negate the value
-                Ok(Token::Number(-num))
+                if self.take_percent() {
+                    Ok(Token::Percentage(-num))
+                } else {
+                    Ok(Token::Number(-num))
+                }
             }
             // nothing else allowed
             Some(c) => Err(LexParseError::LexUnexpectedChar(c)),
@@ -191,34 +225,30 @@ impl<'t> Parser<'t> {
         t
     }
 
-    // Parse CSS-style color function syntax into a CliColor.
-    // Accepts color coordinates only, no alpha channel.
-    //
-    // color_func_spec: legacy_rgb_func | ok_func | color_func
-    //
-    // legacy_rgb_func: ID("rgb") '(' legacy_rgb_coord{3} ')'
-    // ok_func: ID("oklch" | "oklab") '(' color_coord{3} ')'
-    // color_func: ID("color") '(' color_space color_coord{3} ')'
-    //
-    // legacy_rgb_coord: percent_value | NUM
-    // percent_value: NUM '%'
-    // color_coord: NUM
-    //
-    // color_space: ID ("srgb" | "--oklch" | "--oklab" | "--oklrch" | "--oklrab")
     fn parse_color(&mut self) -> Result<CliColor, LexParseError> {
-        // parse general form: ID '(' ID? NUM NUM NUM ')'
+        // Parse CSS-style color function syntax into a CliColor.
+        // Accepts color coordinates only, no alpha channel.
+        //
+        // color_func_spec: legacy_rgb_func | modern_rgb_func | ok_func | color_func
+        //
+        // legacy_rgb_func: ID("rgb") '(' legacy_rgb_coords ')'
+        // modern_rgb_func: ID("rgb") '(' modern_rgb_coord{3} ')'
+        // ok_func: ID("oklch" | "oklab") '(' color_coord{3} ')'
+        // color_func: ID("color") '(' color_space color_coord{3} ')'
+        //
+        // legacy_rgb_coords: (percentage (',' percentage){2}) | (NUM (',' NUM){2})
+        // modern_rgb_coord: percentage | NUM
+        // percentage: NUM '%'
+        // color_coord: NUM
+        //
+        // color_space: ID ("srgb" | "--oklch" | "--oklab" | "--oklrch" | "--oklrab")
+
         let func_name = self.expect_ident("a function name")?;
 
         self.expect_symbol(&Token::LParen, "'('")?;
 
         let color = match func_name.as_str() {
-            "rgb" => {
-                let mut coords = [0.; 3];
-                for c in &mut coords {
-                    *c = self.parse_rgb_value()?;
-                }
-                CliColor::SRGB(Color::<SRGB>::new(coords))
-            }
+            "rgb" => CliColor::SRGB(Color::<SRGB>::new(self.parse_rgb_coords()?)),
             "oklch" => CliColor::OKLCH(Color::<OKLCH>::new(self.parse_coords()?)),
             "oklab" => CliColor::OKLAB(Color::<OKLAB>::new(self.parse_coords()?)),
             "color" => {
@@ -247,14 +277,24 @@ impl<'t> Parser<'t> {
         Ok(color)
     }
 
-    fn parse_rgb_value(&mut self) -> Result<f64, LexParseError> {
-        let val = self.expect_number("a number")?;
-        if self.peek() == Some(&Token::Percent) {
-            self.advance();
-            Ok(val / 100.)
-        } else {
-            Ok(val / 255.)
+    fn parse_rgb_coords(&mut self) -> Result<Vector3, LexParseError> {
+        let mut coords = [0.; 3];
+
+        let first_coord = self.expect_number_or_percentage("a number or percentage")?;
+        coords[0] = first_coord.norm_value();
+        let legacy_commas = self.peek() == Some(&Token::Comma);
+
+        for c in &mut coords[1..] {
+            if legacy_commas {
+                self.expect_symbol(&Token::Comma, "','")?;
+            }
+            let this_coord = self.expect_number_or_percentage("a number or percentage")?;
+            if legacy_commas && (first_coord.is_percentage() != this_coord.is_percentage()) {
+                return Err(LexParseError::ParseMismatchedRgbComponents);
+            }
+            *c = this_coord.norm_value();
         }
+        Ok(coords)
     }
 
     fn parse_coords(&mut self) -> Result<Vector3, LexParseError> {
@@ -281,6 +321,18 @@ impl<'t> Parser<'t> {
         }
     }
 
+    fn expect_number_or_percentage(
+        &mut self,
+        expected: &'static str,
+    ) -> Result<RgbNumOrPercent, LexParseError> {
+        match self.advance() {
+            Some(Token::Number(num)) => Ok(RgbNumOrPercent::Number(num)),
+            Some(Token::Percentage(percent)) => Ok(RgbNumOrPercent::Percentage(percent)),
+            Some(_) => Err(LexParseError::ParseUnexpectedToken { expected }),
+            None => Err(LexParseError::ParseUnexpectedEndOfInput { expected }),
+        }
+    }
+
     fn expect_symbol(&mut self, want: &Token, expected: &'static str) -> Result<(), LexParseError> {
         match self.advance() {
             Some(sym) if sym == *want => Ok(()),
@@ -290,6 +342,15 @@ impl<'t> Parser<'t> {
     }
 }
 
+/// Parse a CSS-style color function string, and return a CliColor on success.
+/// Accepts color coordinates only, no alpha channel.
+/// Color functions accepted are:
+/// * legacy rgb() -- commas and all-number/all-percentage components
+/// * modern rgb()
+/// * oklch()
+/// * oklab()
+/// * color(), with srgb, --oklch, --oklab, --oklrch, and --oklrab color spaces
+/// NOTE: rust-style numbers (final decimal point form) are allowed.
 pub(crate) fn parse_color_string(color_string: &str) -> Result<CliColor, LexParseError> {
     Lexer::new(color_string)
         .collect::<Result<Vec<Token>, LexParseError>>()
@@ -311,11 +372,9 @@ mod tests {
             vec![
                 Token::Ident("rgb".into()),
                 Token::LParen,
-                Token::Number(100.),
-                Token::Percent,
+                Token::Percentage(100.),
                 Token::Number(128.),
-                Token::Number(50.),
-                Token::Percent,
+                Token::Percentage(50.),
                 Token::RParen,
             ]
         )
@@ -392,7 +451,9 @@ mod tests {
                 Token::Ident("rgb".into()),
                 Token::LParen,
                 Token::Number(10.),
+                Token::Comma,
                 Token::Number(20.),
+                Token::Comma,
                 Token::Number(30.),
                 Token::RParen,
             ]
@@ -400,13 +461,46 @@ mod tests {
     }
 
     #[test]
-    fn test_parser_rgb_func() {
+    fn test_parser_rgb_func_modern() {
         let src = "rgb(10% 128 10)";
         let color = parse_color_string(src).expect("color string should be parseable");
         let CliColor::SRGB(srgb_color) = color else {
             panic!("Expected an sRGB color; got something else.");
         };
         let expected = [0.1, 128. / 255., 10. / 255.];
+        assert_eq!(srgb_color.coords, expected);
+    }
+
+    #[test]
+    fn test_parser_rgb_legacy_modern() {
+        let legacy_src = "rgb(10, 20, 30)";
+        let legacy_rgb =
+            parse_color_string(legacy_src).expect("legacy rgb color string should be parseable");
+        let CliColor::SRGB(legacy_rgb_color) = legacy_rgb else {
+            panic!("Expected an sRGB color; got something else.");
+        };
+        let expected = [10. / 255., 20. / 255., 30. / 255.];
+        assert_eq!(legacy_rgb_color.coords, expected);
+
+        let modern_src = "rgb(10 20 30)";
+        let modern_rgb =
+            parse_color_string(modern_src).expect("modern rgb color string should be parseable");
+        let CliColor::SRGB(modern_rgb_color) = modern_rgb else {
+            panic!("Expected an sRGB color; got something else.");
+        };
+
+        assert_eq!(legacy_rgb_color.coords, modern_rgb_color.coords);
+    }
+
+    #[test]
+    fn test_parser_rgb_legacy_percentages() {
+        let src = "rgb(-10%, 20%, 30%)";
+        let color = parse_color_string(src).expect("color string should be parseable");
+        let CliColor::SRGB(srgb_color) = color else {
+            panic!("Expected an sRGB color; got something else.");
+        };
+        let expected = [-0.1, 0.2, 0.3];
+
         assert_eq!(srgb_color.coords, expected);
     }
 
@@ -491,7 +585,7 @@ mod tests {
     #[test]
     fn test_invalid_inputs_are_rejected() {
         type ErrorPredicate = fn(&LexParseError) -> bool;
-        let invalid_inputs: [(&str, ErrorPredicate); 12] = [
+        let invalid_inputs: &[(&str, ErrorPredicate)] = &[
             ("oklch(0.5 0.2 @)", |e| {
                 matches!(e, LexParseError::LexUnknownChar('@'))
             }),
@@ -547,6 +641,72 @@ mod tests {
                         expected: "a number"
                     }
                 )
+            }),
+            ("rgb(1, 2 3)", |e| {
+                matches!(e, LexParseError::ParseUnexpectedToken { expected: "','" })
+            }),
+            ("rgb(1 2, 3)", |e| {
+                matches!(
+                    e,
+                    LexParseError::ParseUnexpectedToken {
+                        expected: "a number or percentage"
+                    }
+                )
+            }),
+            ("rgb(1, 2, 3,)", |e| {
+                matches!(e, LexParseError::ParseUnexpectedToken { expected: "')'" })
+            }),
+            ("rgb(1,, 2, 3)", |e| {
+                matches!(
+                    e,
+                    LexParseError::ParseUnexpectedToken {
+                        expected: "a number or percentage"
+                    }
+                )
+            }),
+            ("rgb(1)", |e| {
+                matches!(
+                    e,
+                    LexParseError::ParseUnexpectedToken {
+                        expected: "a number or percentage"
+                    }
+                )
+            }),
+            ("rgb(1,)", |e| {
+                matches!(
+                    e,
+                    LexParseError::ParseUnexpectedToken {
+                        expected: "a number or percentage"
+                    }
+                )
+            }),
+            ("oklch(1, 2, 3)", |e| {
+                matches!(
+                    e,
+                    LexParseError::ParseUnexpectedToken {
+                        expected: "a number"
+                    }
+                )
+            }),
+            ("color(srgb 1, 2, 3)", |e| {
+                matches!(
+                    e,
+                    LexParseError::ParseUnexpectedToken {
+                        expected: "a number"
+                    }
+                )
+            }),
+            ("rgb(10%, 20, 30)", |e| {
+                matches!(e, LexParseError::ParseMismatchedRgbComponents)
+            }),
+            ("rgb(10, 20%, 30)", |e| {
+                matches!(e, LexParseError::ParseMismatchedRgbComponents)
+            }),
+            ("oklch(0.5 0.2 -x)", |e| {
+                matches!(e, LexParseError::LexUnexpectedChar('x'))
+            }),
+            ("rgb(50 % 20 30)", |e| {
+                matches!(e, LexParseError::LexUnknownChar('%'))
             }),
         ];
 
