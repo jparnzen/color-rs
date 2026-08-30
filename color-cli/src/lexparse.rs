@@ -95,8 +95,17 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    // NOTE that this method correctly parses color functions that may look malformed
+    // but are valid CSS, per the CSS Syntax 3 spec, and as implemented in Firefox
+    // and Chromium.
+    //
+    // In particular:
+    // * "rgb(1 2-3)" parses as "rgb(1 2 -3)"
+    // * "rgb(50%2 3)" parses as "rgb(50% 2 3)"
+    //
+    // See tests below for coverage.
     fn next_token(&mut self) -> Result<Option<Token>, LexParseError> {
-        // skip whitespace
+        // eat whitespace
         while self.chars.next_if(|c| c.is_whitespace()).is_some() {}
 
         let Some(lexeme) = self.chars.peek().copied() else {
@@ -278,9 +287,11 @@ impl<'t> Parser<'t> {
     }
 
     fn parse_rgb_coords(&mut self) -> Result<Vector3, LexParseError> {
+        const EXPECT_NUM_OR_PERCENT: &str = "a number or percentage";
+
         let mut coords = [0.; 3];
 
-        let first_coord = self.expect_number_or_percentage("a number or percentage")?;
+        let first_coord = self.expect_number_or_percentage(EXPECT_NUM_OR_PERCENT)?;
         coords[0] = first_coord.norm_value();
         let legacy_commas = self.peek() == Some(&Token::Comma);
 
@@ -288,7 +299,7 @@ impl<'t> Parser<'t> {
             if legacy_commas {
                 self.expect_symbol(&Token::Comma, "','")?;
             }
-            let this_coord = self.expect_number_or_percentage("a number or percentage")?;
+            let this_coord = self.expect_number_or_percentage(EXPECT_NUM_OR_PERCENT)?;
             if legacy_commas && (first_coord.is_percentage() != this_coord.is_percentage()) {
                 return Err(LexParseError::ParseMismatchedRgbComponents);
             }
@@ -344,13 +355,16 @@ impl<'t> Parser<'t> {
 
 /// Parse a CSS-style color function string, and return a CliColor on success.
 /// Accepts color coordinates only, no alpha channel.
+///
 /// Color functions accepted are:
 /// * legacy rgb() -- commas and all-number/all-percentage components
 /// * modern rgb()
 /// * oklch()
 /// * oklab()
 /// * color(), with srgb, --oklch, --oklab, --oklrch, and --oklrab color spaces
-/// NOTE: rust-style numbers (final decimal point form) are allowed.
+///
+/// NOTE: numbers with a trailing decimal point (e.g. "5.") are accepted;
+///       CSS requires at least one digit following a decimal point ("5.0").
 pub(crate) fn parse_color_string(color_string: &str) -> Result<CliColor, LexParseError> {
     Lexer::new(color_string)
         .collect::<Result<Vec<Token>, LexParseError>>()
@@ -724,5 +738,26 @@ mod tests {
             "tests failed with wrong error:\n{:#?}",
             mismatched_errors
         )
+    }
+
+    #[test]
+    fn test_parser_token_boundaries() {
+        let test_cases = [
+            ("rgb(50%2 3)", [0.5, 2. / 255., 3. / 255.]),
+            ("rgb(1 2-3)", [1. / 255., 2. / 255., -3. / 255.]),
+        ];
+
+        let mut errors = vec![];
+        for (test_str, expected) in test_cases {
+            let color = parse_color_string(test_str)
+                .unwrap_or_else(|e| panic!("{test_str:?} should parse; got {e:?}"));
+            let CliColor::SRGB(rgb_color) = color else {
+                panic!("Expected an sRGB color for {test_str:?}; got something else.");
+            };
+            if rgb_color.coords != expected {
+                errors.push((test_str, expected, rgb_color.coords));
+            }
+        }
+        assert!(errors.is_empty(), "sRGB coords mismatched:\n{:#?}", errors);
     }
 }
