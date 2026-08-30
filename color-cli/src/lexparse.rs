@@ -19,12 +19,15 @@ pub(crate) enum LexParseError {
     ParseUnexpectedEndOfInput { expected: &'static str },
     ParseTrailingTokens,
     ParseMismatchedRgbComponents,
+    ParseBadHexStringLength,
+    ParseBadHexValue(std::num::ParseIntError),
 }
 
 impl std::error::Error for LexParseError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::LexInvalidNumber(e) => Some(e),
+            Self::ParseBadHexValue(e) => Some(e),
             _ => None,
         }
     }
@@ -51,6 +54,10 @@ impl std::fmt::Display for LexParseError {
                 f,
                 "legacy rgb() must use all numbers or all percentages for its components"
             ),
+            Self::ParseBadHexStringLength => {
+                write!(f, "rgb hex string must be #rrggbb (7 characters long)")
+            }
+            Self::ParseBadHexValue(_) => write!(f, "bad hex value"),
         }
     }
 }
@@ -369,6 +376,23 @@ pub(crate) fn parse_color_string(color_string: &str) -> Result<CliColor, LexPars
     Lexer::new(color_string)
         .collect::<Result<Vec<Token>, LexParseError>>()
         .and_then(|tokens| Parser::new(&tokens).parse_color())
+}
+
+/// Parse an RGB hex string (#rrggbb) to an sRGB color.
+pub(crate) fn parse_rgbhex(hex_str: &str) -> Result<CliColor, LexParseError> {
+    if hex_str.len() != 7 {
+        return Err(LexParseError::ParseBadHexStringLength);
+    }
+
+    let r = u8::from_str_radix(&hex_str[1..=2], 16).map_err(LexParseError::ParseBadHexValue)?;
+    let g = u8::from_str_radix(&hex_str[3..=4], 16).map_err(LexParseError::ParseBadHexValue)?;
+    let b = u8::from_str_radix(&hex_str[5..=6], 16).map_err(LexParseError::ParseBadHexValue)?;
+
+    Ok(CliColor::SRGB(Color::<SRGB>::new([
+        f64::from(r) / 255.,
+        f64::from(g) / 255.,
+        f64::from(b) / 255.,
+    ])))
 }
 
 #[cfg(test)]
@@ -722,6 +746,9 @@ mod tests {
             ("rgb(50 % 20 30)", |e| {
                 matches!(e, LexParseError::LexUnknownChar('%'))
             }),
+            ("color(srgb 100% 50% 20% / 0.8)", |e| {
+                matches!(e, LexParseError::LexUnknownChar('/'))
+            }),
         ];
 
         let mut mismatched_errors = vec![];
@@ -759,5 +786,21 @@ mod tests {
             }
         }
         assert!(errors.is_empty(), "sRGB coords mismatched:\n{:#?}", errors);
+    }
+
+    #[test]
+    fn test_parse_rgbhex_success() {
+        let src = "#aabbcc";
+        let result = parse_rgbhex(src).unwrap();
+        let CliColor::SRGB(result) = result else {
+            panic!("Expected SRGB color from parse_rgbhex()");
+        };
+        let expected = [
+            f64::from(0xaa) / 255.,
+            f64::from(0xbb) / 255.,
+            f64::from(0xcc) / 255.,
+        ];
+
+        assert_eq!(result.coords, expected)
     }
 }
