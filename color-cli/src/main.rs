@@ -5,13 +5,13 @@ mod lexparse;
 
 use anyhow::Result;
 use clap::{Arg, command};
-use color_lib::{Color, OKLAB, OKLCH, OKLrAB, OKLrCH, SRGB, XYZD65};
+use color_lib::{BoundedColorSpace, Color, OKLAB, OKLCH, OKLrAB, OKLrCH, SRGB, XYZD65};
 use lexparse::{parse_color_string, parse_rgbhex};
 use std::fmt::Display;
 
 // Wrapper type for the type-safe Color<> structs
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum CliColor {
     SRGB(Color<SRGB>),
     OKLCH(Color<OKLCH>),
@@ -21,55 +21,73 @@ enum CliColor {
 }
 
 impl CliColor {
+    fn to_output_format(&self) -> OutputFormat {
+        match self {
+            Self::SRGB(_) => OutputFormat::Rgb,
+            Self::OKLAB(_) => OutputFormat::Oklab,
+            Self::OKLCH(_) => OutputFormat::Oklch,
+            Self::OKLrAB(_) => OutputFormat::Oklrab,
+            Self::OKLrCH(_) => OutputFormat::Oklrch,
+        }
+    }
+
     fn convert_to(&self, dest_format: &OutputFormat) -> CliColor {
+        // Prevent doing double-conversions to the same output/dest format.
+        // Double-conversion (e.g. sRGB -> XYZ -> sRGB) is a lossy operation,
+        // imparting noise especially for expected zero values.
+        // This has caused in-gamut colors to report as out of gamut.
+        if self.to_output_format() == *dest_format {
+            return self.clone();
+        }
+
         let xyz = self.to_XYZ();
         match dest_format {
-            OutputFormat::Rgb => CliColor::SRGB(xyz.convert_to()),
-            OutputFormat::Oklab => CliColor::OKLAB(xyz.convert_to()),
-            OutputFormat::Oklch => CliColor::OKLCH(xyz.convert_to()),
-            OutputFormat::Oklrab => CliColor::OKLrAB(xyz.convert_to()),
-            OutputFormat::Oklrch => CliColor::OKLrCH(xyz.convert_to()),
+            OutputFormat::Rgb => Self::SRGB(xyz.convert_to()),
+            OutputFormat::Oklab => Self::OKLAB(xyz.convert_to()),
+            OutputFormat::Oklch => Self::OKLCH(xyz.convert_to()),
+            OutputFormat::Oklrab => Self::OKLrAB(xyz.convert_to()),
+            OutputFormat::Oklrch => Self::OKLrCH(xyz.convert_to()),
         }
     }
 
     #[allow(non_snake_case)]
     fn to_XYZ(&self) -> Color<XYZD65> {
         match self {
-            CliColor::SRGB(c) => c.convert_to(),
-            CliColor::OKLAB(c) => c.convert_to(),
-            CliColor::OKLCH(c) => c.convert_to(),
-            CliColor::OKLrAB(c) => c.convert_to(),
-            CliColor::OKLrCH(c) => c.convert_to(),
+            Self::SRGB(c) => c.convert_to(),
+            Self::OKLAB(c) => c.convert_to(),
+            Self::OKLCH(c) => c.convert_to(),
+            Self::OKLrAB(c) => c.convert_to(),
+            Self::OKLrCH(c) => c.convert_to(),
         }
     }
 
     fn gamutmap_minde(&self) -> CliColor {
         match self {
-            CliColor::SRGB(c) => CliColor::SRGB(c.gamutmap_local_minde()),
-            CliColor::OKLAB(c) => CliColor::SRGB(c.gamutmap_local_minde()),
-            CliColor::OKLCH(c) => CliColor::SRGB(c.gamutmap_local_minde()),
-            CliColor::OKLrAB(c) => CliColor::SRGB(c.gamutmap_local_minde()),
-            CliColor::OKLrCH(c) => CliColor::SRGB(c.gamutmap_local_minde()),
+            Self::SRGB(c) => Self::SRGB(c.gamutmap_local_minde()),
+            Self::OKLAB(c) => Self::SRGB(c.gamutmap_local_minde()),
+            Self::OKLCH(c) => Self::SRGB(c.gamutmap_local_minde()),
+            Self::OKLrAB(c) => Self::SRGB(c.gamutmap_local_minde()),
+            Self::OKLrCH(c) => Self::SRGB(c.gamutmap_local_minde()),
         }
     }
 
     fn gamutmap_raytrace(&self) -> CliColor {
         match self {
-            CliColor::SRGB(c) => CliColor::SRGB(c.gamutmap_raytrace()),
-            CliColor::OKLAB(c) => CliColor::SRGB(c.gamutmap_raytrace()),
-            CliColor::OKLCH(c) => CliColor::SRGB(c.gamutmap_raytrace()),
-            CliColor::OKLrAB(c) => CliColor::SRGB(c.gamutmap_raytrace()),
-            CliColor::OKLrCH(c) => CliColor::SRGB(c.gamutmap_raytrace()),
+            Self::SRGB(c) => Self::SRGB(c.gamutmap_raytrace()),
+            Self::OKLAB(c) => Self::SRGB(c.gamutmap_raytrace()),
+            Self::OKLCH(c) => Self::SRGB(c.gamutmap_raytrace()),
+            Self::OKLrAB(c) => Self::SRGB(c.gamutmap_raytrace()),
+            Self::OKLrCH(c) => Self::SRGB(c.gamutmap_raytrace()),
         }
     }
 
     fn clip(&self) -> CliColor {
         match self {
-            CliColor::SRGB(c) => CliColor::SRGB(c.clip()),
-            CliColor::OKLAB(c) => CliColor::SRGB(c.clip()),
-            CliColor::OKLCH(c) => CliColor::SRGB(c.clip()),
-            CliColor::OKLrAB(c) => CliColor::SRGB(c.clip()),
-            CliColor::OKLrCH(c) => CliColor::SRGB(c.clip()),
+            Self::SRGB(c) => Self::SRGB(c.clip()),
+            Self::OKLAB(c) => Self::SRGB(c.clip()),
+            Self::OKLCH(c) => Self::SRGB(c.clip()),
+            Self::OKLrAB(c) => Self::SRGB(c.clip()),
+            Self::OKLrCH(c) => Self::SRGB(c.clip()),
         }
     }
 }
@@ -78,33 +96,32 @@ impl Display for CliColor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         const SIG_DIG: i32 = 5;
         match self {
-            CliColor::SRGB(color) => {
-                let [r, g, b] = color.coords.map(|v| round_to_significant(v, SIG_DIG));
-                let [un_r, un_g, un_b] = color
-                    .coords
-                    .map(|c| round_to_significant((c * 255.).round(), SIG_DIG));
+            Self::SRGB(color) => {
+                let [r, g, b] = color.coords.map(|c| round_to_significant(c, SIG_DIG));
+                // NOTE that casting to i32 will fix any -0 situations from round()
+                let [r255, g255, b255] = color.coords.map(|c| (c * 255.).round() as i32);
 
                 write!(
                     f,
-                    "color(srgb {r} {g} {b})  ||  rgb({un_r} {un_g} {un_b})  ||  #{:02x}{:02x}{:02x}",
-                    (r.clamp(0., 1.) * 255.).round() as u8,
-                    (g.clamp(0., 1.) * 255.).round() as u8,
-                    (b.clamp(0., 1.) * 255.).round() as u8
+                    "color(srgb {r} {g} {b})  \u{2502}  rgb({r255} {g255} {b255})  \u{2502}  #{:02x}{:02x}{:02x}",
+                    r255.clamp(0, 255) as u8,
+                    g255.clamp(0, 255) as u8,
+                    b255.clamp(0, 255) as u8
                 )
             }
-            CliColor::OKLAB(color) => {
+            Self::OKLAB(color) => {
                 let [l, a, b] = color.coords.map(|v| round_to_significant(v, SIG_DIG));
                 write!(f, "oklab({l} {a} {b})")
             }
-            CliColor::OKLCH(color) => {
+            Self::OKLCH(color) => {
                 let [l, c, h] = color.coords.map(|v| round_to_significant(v, SIG_DIG));
                 write!(f, "oklch({l} {c} {h})")
             }
-            CliColor::OKLrAB(color) => {
+            Self::OKLrAB(color) => {
                 let [lr, a, b] = color.coords.map(|v| round_to_significant(v, SIG_DIG));
                 write!(f, "color(--oklrab {lr} {a} {b})")
             }
-            CliColor::OKLrCH(color) => {
+            Self::OKLrCH(color) => {
                 let [lr, c, h] = color.coords.map(|v| round_to_significant(v, SIG_DIG));
                 write!(f, "color(--oklrch {lr} {c} {h})")
             }
@@ -163,24 +180,21 @@ fn main() -> Result<()> {
 
     let dest_color = input_color.convert_to(dest_format);
 
-    let (gma_color, gma_applied) = match matches.get_one::<GamutMapAlgo>("gma") {
-        Some(GamutMapAlgo::Clip) => (dest_color.clip(), true),
-        Some(GamutMapAlgo::Minde) => (dest_color.gamutmap_minde(), true),
-        Some(GamutMapAlgo::Raytrace) => (dest_color.gamutmap_raytrace(), true),
-        None => (dest_color, false),
+    let gma_color = match matches.get_one::<GamutMapAlgo>("gma") {
+        Some(GamutMapAlgo::Clip) => dest_color.clip(),
+        Some(GamutMapAlgo::Minde) => dest_color.gamutmap_minde(),
+        Some(GamutMapAlgo::Raytrace) => dest_color.gamutmap_raytrace(),
+        None => dest_color,
     };
 
-    // Prevent doing double-conversions to the same output/dest format
-    let output_color = if gma_applied && dest_format != &OutputFormat::Rgb {
-        gma_color.convert_to(dest_format)
-    } else {
-        gma_color
-    };
+    let output_color = gma_color.convert_to(dest_format);
 
     if let CliColor::SRGB(color) = &output_color
-        && !color.in_gamut::<SRGB>()
+        && !SRGB::in_gamut(color)
     {
-        eprintln!("WARNING: color is outside of sRGB gamut limits => hex values will be clipped.");
+        eprintln!(
+            ">>> WARNING <<< The color is outside of sRGB gamut limits => hex values will be clipped."
+        );
     }
 
     println!("{output_color}");
