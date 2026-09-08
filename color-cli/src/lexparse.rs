@@ -156,6 +156,15 @@ impl<'a> Lexer<'a> {
         while let Some(c) = self.chars.next_if(|c| c.is_ascii_digit() || *c == '.') {
             buf.push(c);
         }
+        if let Some(e) = self.chars.next_if(|c| *c == 'e' || *c == 'E') {
+            buf.push(e);
+            if let Some(sign) = self.chars.next_if(|c| *c == '+' || *c == '-') {
+                buf.push(sign);
+            }
+            while let Some(c) = self.chars.next_if(|c| c.is_ascii_digit()) {
+                buf.push(c);
+            }
+        }
 
         buf.parse::<f64>().map_err(LexParseError::LexInvalidNumber)
     }
@@ -749,6 +758,9 @@ mod tests {
             ("color(srgb 100% 50% 20% / 0.8)", |e| {
                 matches!(e, LexParseError::LexUnknownChar('/'))
             }),
+            ("rgb(5e 10 20)", |e| {
+                matches!(e, LexParseError::LexInvalidNumber(_))
+            }),
         ];
 
         let mut mismatched_errors = vec![];
@@ -801,6 +813,35 @@ mod tests {
             f64::from(0xcc) / 255.,
         ];
 
-        assert_eq!(result.coords, expected)
+        assert_eq!(result.coords, expected);
+    }
+
+    #[test]
+    fn test_lex_number_scientific_notation() {
+        let tests = [
+            ("1e2", [Token::Number(1e2)]),
+            ("1E2", [Token::Number(1e2)]),
+            ("1e+2", [Token::Number(1e2)]),
+            ("1E-2", [Token::Number(1e-2)]),
+            ("-1e-2", [Token::Number(-1e-2)]),
+            ("1.e2", [Token::Number(1e2)]),
+            (".1e3", [Token::Number(0.1e3)]),
+            ("-1e-18", [Token::Number(-1e-18)]),
+        ];
+
+        let mut errors = vec![];
+        for (test_str, expected) in tests {
+            let tokens = Lexer::new(test_str)
+                .collect::<Result<Vec<Token>, LexParseError>>()
+                .unwrap();
+            if tokens != expected {
+                errors.push((test_str, tokens, expected));
+            }
+        }
+        assert!(
+            errors.is_empty(),
+            "mismatched number tokens for:\n{:#?}",
+            errors
+        );
     }
 }

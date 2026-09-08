@@ -5,7 +5,7 @@ mod lexparse;
 
 use anyhow::Result;
 use clap::{Arg, command};
-use color_lib::{BoundedColorSpace, Color, OKLAB, OKLCH, OKLrAB, OKLrCH, SRGB, XYZD65};
+use color_lib::{BoundedColorSpace, Color, OKLAB, OKLCH, OKLrAB, OKLrCH, SRGB, Vector3, XYZD65};
 use lexparse::{parse_color_string, parse_rgbhex};
 use std::fmt::Display;
 
@@ -28,6 +28,16 @@ impl CliColor {
             Self::OKLCH(_) => OutputFormat::Oklch,
             Self::OKLrAB(_) => OutputFormat::Oklrab,
             Self::OKLrCH(_) => OutputFormat::Oklrch,
+        }
+    }
+
+    fn coords(&self) -> Vector3 {
+        match self {
+            Self::SRGB(c) => c.coords,
+            Self::OKLAB(c) => c.coords,
+            Self::OKLCH(c) => c.coords,
+            Self::OKLrAB(c) => c.coords,
+            Self::OKLrCH(c) => c.coords,
         }
     }
 
@@ -270,10 +280,52 @@ mod tests {
     }
 
     #[test]
-    fn test_output_format() {
+    fn test_display_format_oklch() {
         let src = "oklch(0.5 0.5 110)";
         let color = parse_color_string(src).expect("color string should be parseable");
         let output_string = format!("{color}");
         assert_eq!(output_string, src);
+    }
+
+    #[test]
+    fn test_display_format_rgb() {
+        let src = "#ffcc00";
+        let color = parse_rgbhex(src).expect("color string should be parseable");
+        let output_string = format!("{color}");
+        let expected = "color(srgb 1 0.8 0)  \u{2502}  rgb(255 204 0)  \u{2502}  #ffcc00";
+        assert_eq!(output_string, expected);
+    }
+
+    #[test]
+    fn test_convert_to_identity() {
+        let src = "#ffcc00";
+        let rgb_color1 = parse_rgbhex(src).expect("color string should be parseable");
+        let rgb_color2 = rgb_color1.convert_to(&OutputFormat::Rgb);
+        assert_eq!(rgb_color1.coords(), rgb_color2.coords());
+    }
+
+    #[test]
+    fn test_to_output_format() {
+        let tests = [
+            ("rgb(0 0 0)", OutputFormat::Rgb),
+            ("oklab(0 0 0)", OutputFormat::Oklab),
+            ("oklch(0 0 0)", OutputFormat::Oklch),
+            ("color(--oklrab 0 0 0)", OutputFormat::Oklrab),
+            ("color(--oklrch 0 0 0)", OutputFormat::Oklrch),
+        ];
+
+        let mut errors = vec![];
+        for (test_str, expected) in tests {
+            let result = parse_color_string(test_str).expect("color string should be parseable");
+            let output_format = result.to_output_format();
+            if output_format != expected {
+                errors.push((test_str, expected, output_format));
+            }
+        }
+        assert!(
+            errors.is_empty(),
+            "mismatched output formats:\n{:#?}",
+            errors
+        );
     }
 }
