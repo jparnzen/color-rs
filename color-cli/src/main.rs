@@ -23,7 +23,7 @@ enum CliColor {
 impl CliColor {
     fn to_output_format(&self) -> OutputFormat {
         match self {
-            Self::SRGB(_) => OutputFormat::Rgb,
+            Self::SRGB(_) => OutputFormat::Srgb,
             Self::OKLAB(_) => OutputFormat::Oklab,
             Self::OKLCH(_) => OutputFormat::Oklch,
             Self::OKLrAB(_) => OutputFormat::Oklrab,
@@ -52,7 +52,7 @@ impl CliColor {
 
         let xyz = self.to_XYZ();
         match dest_format {
-            OutputFormat::Rgb => Self::SRGB(xyz.convert_to()),
+            OutputFormat::Srgb => Self::SRGB(xyz.convert_to()),
             OutputFormat::Oklab => Self::OKLAB(xyz.convert_to()),
             OutputFormat::Oklch => Self::OKLCH(xyz.convert_to()),
             OutputFormat::Oklrab => Self::OKLrAB(xyz.convert_to()),
@@ -141,7 +141,7 @@ impl Display for CliColor {
 
 #[derive(Clone, Debug, PartialEq, clap::ValueEnum)]
 enum OutputFormat {
-    Rgb,
+    Srgb,
     Oklch,
     Oklab,
     Oklrch,
@@ -300,14 +300,14 @@ mod tests {
     fn test_convert_to_identity() {
         let src = "#ffcc00";
         let rgb_color1 = parse_rgbhex(src).expect("color string should be parseable");
-        let rgb_color2 = rgb_color1.convert_to(&OutputFormat::Rgb);
+        let rgb_color2 = rgb_color1.convert_to(&OutputFormat::Srgb);
         assert_eq!(rgb_color1.coords(), rgb_color2.coords());
     }
 
     #[test]
     fn test_to_output_format() {
         let tests = [
-            ("rgb(0 0 0)", OutputFormat::Rgb),
+            ("rgb(0 0 0)", OutputFormat::Srgb),
             ("oklab(0 0 0)", OutputFormat::Oklab),
             ("oklch(0 0 0)", OutputFormat::Oklch),
             ("color(--oklrab 0 0 0)", OutputFormat::Oklrab),
