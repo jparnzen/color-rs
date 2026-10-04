@@ -105,11 +105,15 @@ impl CliColor {
 impl Display for CliColor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         const SIG_DIG: i32 = 5;
+
+        let raw_coords = self.coords();
+        let rounded_coords = raw_coords.map(|c| round_to_significant(c, SIG_DIG));
+
         match self {
-            Self::SRGB(color) => {
-                let [r, g, b] = color.coords.map(|c| round_to_significant(c, SIG_DIG));
-                // NOTE that casting to i32 will fix any -0 situations from round()
-                let [r255, g255, b255] = color.coords.map(|c| (c * 255.).round() as i32);
+            Self::SRGB(_) => {
+                let [r, g, b] = rounded_coords;
+                // NOTE casting to i32 will fix any -0 situations from round()
+                let [r255, g255, b255] = raw_coords.map(|c| (c * 255.).round() as i32);
 
                 write!(
                     f,
@@ -119,20 +123,20 @@ impl Display for CliColor {
                     b255.clamp(0, 255) as u8
                 )
             }
-            Self::OKLAB(color) => {
-                let [l, a, b] = color.coords.map(|v| round_to_significant(v, SIG_DIG));
+            Self::OKLAB(_) => {
+                let [l, a, b] = rounded_coords;
                 write!(f, "oklab({l} {a} {b})")
             }
-            Self::OKLCH(color) => {
-                let [l, c, h] = color.coords.map(|v| round_to_significant(v, SIG_DIG));
+            Self::OKLCH(_) => {
+                let [l, c, h] = rounded_coords;
                 write!(f, "oklch({l} {c} {h})")
             }
-            Self::OKLrAB(color) => {
-                let [lr, a, b] = color.coords.map(|v| round_to_significant(v, SIG_DIG));
+            Self::OKLrAB(_) => {
+                let [lr, a, b] = rounded_coords;
                 write!(f, "color(--oklrab {lr} {a} {b})")
             }
-            Self::OKLrCH(color) => {
-                let [lr, c, h] = color.coords.map(|v| round_to_significant(v, SIG_DIG));
+            Self::OKLrCH(_) => {
+                let [lr, c, h] = rounded_coords;
                 write!(f, "color(--oklrch {lr} {c} {h})")
             }
         }
