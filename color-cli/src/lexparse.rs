@@ -7,7 +7,7 @@ use crate::CliColor;
 use color_lib::{Color, OKLAB, OKLCH, OKLrAB, OKLrCH, SRGB, Vector3};
 
 #[derive(Debug)]
-pub(crate) enum LexParseError {
+pub enum LexParseError {
     LexUnknownChar(char),
     LexInvalidNumber(std::num::ParseFloatError),
     LexEmptyIdentifier,
@@ -381,14 +381,14 @@ impl<'t> Parser<'t> {
 ///
 /// NOTE: numbers with a trailing decimal point (e.g. "5.") are accepted;
 ///       CSS requires at least one digit following a decimal point ("5.0").
-pub(crate) fn parse_color_function(color_string: &str) -> Result<CliColor, LexParseError> {
+pub fn parse_color_function(color_string: &str) -> Result<CliColor, LexParseError> {
     Lexer::new(color_string)
         .collect::<Result<Vec<Token>, LexParseError>>()
         .and_then(|tokens| Parser::new(&tokens).parse())
 }
 
 /// Parse an RGB hex string (#rrggbb) to an sRGB color.
-pub(crate) fn parse_rgbhex(hex_str: &str) -> Result<CliColor, LexParseError> {
+pub fn parse_rgbhex(hex_str: &str) -> Result<CliColor, LexParseError> {
     if hex_str.len() != 7 {
         return Err(LexParseError::ParseBadHexStringLength);
     }
