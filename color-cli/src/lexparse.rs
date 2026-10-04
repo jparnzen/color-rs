@@ -250,7 +250,7 @@ impl<'t> Parser<'t> {
         t
     }
 
-    fn parse_color(&mut self) -> Result<CliColor, LexParseError> {
+    fn parse(&mut self) -> Result<CliColor, LexParseError> {
         // Parse CSS-style color function syntax into a CliColor.
         // Accepts color coordinates only, no alpha channel.
         //
@@ -381,10 +381,10 @@ impl<'t> Parser<'t> {
 ///
 /// NOTE: numbers with a trailing decimal point (e.g. "5.") are accepted;
 ///       CSS requires at least one digit following a decimal point ("5.0").
-pub(crate) fn parse_color_string(color_string: &str) -> Result<CliColor, LexParseError> {
+pub(crate) fn parse_color_function(color_string: &str) -> Result<CliColor, LexParseError> {
     Lexer::new(color_string)
         .collect::<Result<Vec<Token>, LexParseError>>()
-        .and_then(|tokens| Parser::new(&tokens).parse_color())
+        .and_then(|tokens| Parser::new(&tokens).parse())
 }
 
 /// Parse an RGB hex string (#rrggbb) to an sRGB color.
@@ -510,7 +510,7 @@ mod tests {
     #[test]
     fn test_parser_rgb_func_modern() {
         let src = "rgb(10% 128 10)";
-        let color = parse_color_string(src).expect("color string should be parseable");
+        let color = parse_color_function(src).expect("color string should be parseable");
         let CliColor::SRGB(srgb_color) = color else {
             panic!("Expected an sRGB color; got something else.");
         };
@@ -522,7 +522,7 @@ mod tests {
     fn test_parser_rgb_legacy_modern() {
         let legacy_src = "rgb(10, 20, 30)";
         let legacy_rgb =
-            parse_color_string(legacy_src).expect("legacy rgb color string should be parseable");
+            parse_color_function(legacy_src).expect("legacy rgb color string should be parseable");
         let CliColor::SRGB(legacy_rgb_color) = legacy_rgb else {
             panic!("Expected an sRGB color; got something else.");
         };
@@ -531,7 +531,7 @@ mod tests {
 
         let modern_src = "rgb(10 20 30)";
         let modern_rgb =
-            parse_color_string(modern_src).expect("modern rgb color string should be parseable");
+            parse_color_function(modern_src).expect("modern rgb color string should be parseable");
         let CliColor::SRGB(modern_rgb_color) = modern_rgb else {
             panic!("Expected an sRGB color; got something else.");
         };
@@ -542,7 +542,7 @@ mod tests {
     #[test]
     fn test_parser_rgb_legacy_percentages() {
         let src = "rgb(-10%, 20%, 30%)";
-        let color = parse_color_string(src).expect("color string should be parseable");
+        let color = parse_color_function(src).expect("color string should be parseable");
         let CliColor::SRGB(srgb_color) = color else {
             panic!("Expected an sRGB color; got something else.");
         };
@@ -554,7 +554,7 @@ mod tests {
     #[test]
     fn test_parser_color_srgb() {
         let src = "color(srgb 1 .5 .25)";
-        let color = parse_color_string(src).expect("color string should be parseable");
+        let color = parse_color_function(src).expect("color string should be parseable");
         let CliColor::SRGB(srgb_color) = color else {
             panic!("Expected an sRGB color; got something else.");
         };
@@ -565,7 +565,7 @@ mod tests {
     #[test]
     fn test_parser_oklab_func() {
         let src = "oklab(0.5 0.2 -0.2)";
-        let color = parse_color_string(src).expect("color string should be parseable");
+        let color = parse_color_function(src).expect("color string should be parseable");
         let CliColor::OKLAB(oklab_color) = color else {
             panic!("Expected an OKLAB color; got something else.");
         };
@@ -576,7 +576,7 @@ mod tests {
     #[test]
     fn test_parser_oklch_func() {
         let src = "oklch(0.5 0.4 110)";
-        let color = parse_color_string(src).expect("color string should be parseable");
+        let color = parse_color_function(src).expect("color string should be parseable");
         let CliColor::OKLCH(oklch_color) = color else {
             panic!("Expected an OKLCH color; got something else.");
         };
@@ -587,7 +587,7 @@ mod tests {
     #[test]
     fn test_parser_color_oklrab() {
         let src = "color(--oklrab 0.05 0.2 -0.2)";
-        let color = parse_color_string(src).expect("color string should be parseable");
+        let color = parse_color_function(src).expect("color string should be parseable");
         let CliColor::OKLrAB(lrab_color) = color else {
             panic!("Expected an OKLrAB color; got something else.");
         };
@@ -598,7 +598,7 @@ mod tests {
     #[test]
     fn test_parser_color_oklrch() {
         let src = "color(--oklrch 0.05 0.4 110)";
-        let color = parse_color_string(src).expect("color string should be parseable");
+        let color = parse_color_function(src).expect("color string should be parseable");
         let CliColor::OKLrCH(lrch_color) = color else {
             panic!("Expected an OKLrCH color; got something else.");
         };
@@ -609,7 +609,7 @@ mod tests {
     #[test]
     fn test_parser_color_oklab() {
         let src = "color(--oklab .5 .2 -.2)";
-        let color = parse_color_string(src).expect("color string should be parseable");
+        let color = parse_color_function(src).expect("color string should be parseable");
         let CliColor::OKLAB(oklab_color) = color else {
             panic!("Expected an OKLAB color; got something else.");
         };
@@ -620,7 +620,7 @@ mod tests {
     #[test]
     fn test_parser_color_oklch() {
         let src = "color(--oklch .5 .4 110)";
-        let color = parse_color_string(src).expect("color string should be parseable");
+        let color = parse_color_function(src).expect("color string should be parseable");
         let CliColor::OKLCH(oklch_color) = color else {
             panic!("Expected an OKLCH color; got something else.");
         };
@@ -765,7 +765,7 @@ mod tests {
 
         let mut mismatched_errors = vec![];
         for (test_str, expect_pred) in invalid_inputs {
-            let Err(err_result) = parse_color_string(test_str) else {
+            let Err(err_result) = parse_color_function(test_str) else {
                 panic!("test string {test_str:?} passed when it shouldn't have.")
             };
             if !expect_pred(&err_result) {
@@ -788,7 +788,7 @@ mod tests {
 
         let mut errors = vec![];
         for (test_str, expected) in test_cases {
-            let color = parse_color_string(test_str)
+            let color = parse_color_function(test_str)
                 .unwrap_or_else(|e| panic!("{test_str:?} should parse; got {e:?}"));
             let CliColor::SRGB(rgb_color) = color else {
                 panic!("Expected an sRGB color for {test_str:?}; got something else.");

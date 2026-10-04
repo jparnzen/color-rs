@@ -6,7 +6,7 @@ mod lexparse;
 use anyhow::Result;
 use clap::{Arg, command};
 use color_lib::{BoundedColorSpace, Color, OKLAB, OKLCH, OKLrAB, OKLrCH, SRGB, Vector3, XYZD65};
-use lexparse::{parse_color_string, parse_rgbhex};
+use lexparse::{parse_color_function, parse_rgbhex};
 use std::fmt::Display;
 
 // Wrapper type for the type-safe Color<> structs
@@ -189,7 +189,7 @@ fn main() -> Result<()> {
     let input_color = if color_string.starts_with('#') {
         parse_rgbhex(color_string)?
     } else {
-        parse_color_string(color_string)?
+        parse_color_function(color_string)?
     };
 
     let dest_color = input_color.convert_to(dest_format);
@@ -232,9 +232,9 @@ mod tests {
     #[test]
     fn test_parse_rgb_values_success() {
         let src = "rgb(100% 50% 20%)";
-        let result = parse_color_string(src).expect("color string should be parseable");
+        let result = parse_color_function(src).expect("color string should be parseable");
         let CliColor::SRGB(result) = result else {
-            panic!("Expected SRGB color from parse_color_string()");
+            panic!("Expected SRGB color from parse_color_function()");
         };
         let expected = [1.0, 0.5, 0.2];
 
@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn test_gamutmap_minde() {
         let src = "oklch(0.99 0.8 110)";
-        let oklch_color = parse_color_string(src).expect("color string should be parseable");
+        let oklch_color = parse_color_function(src).expect("color string should be parseable");
         let gma_color = oklch_color.gamutmap_minde();
         let CliColor::SRGB(result) = gma_color else {
             panic!("Expected sRGB color from gamutmapping");
@@ -272,7 +272,7 @@ mod tests {
     #[test]
     fn test_gamutmap_clip() {
         let src = "oklch(0.99 0.8 110)";
-        let oklch_color = parse_color_string(src).expect("color string should be parseable");
+        let oklch_color = parse_color_function(src).expect("color string should be parseable");
         let clipped_color = oklch_color.clip();
         let CliColor::SRGB(result) = clipped_color else {
             panic!("Expected sRGB color from clip");
@@ -286,7 +286,7 @@ mod tests {
     #[test]
     fn test_display_format_oklch() {
         let src = "oklch(0.5 0.5 110)";
-        let color = parse_color_string(src).expect("color string should be parseable");
+        let color = parse_color_function(src).expect("color string should be parseable");
         let output_string = format!("{color}");
         assert_eq!(output_string, src);
     }
@@ -320,7 +320,7 @@ mod tests {
 
         let mut errors = vec![];
         for (test_str, expected) in tests {
-            let result = parse_color_string(test_str).expect("color string should be parseable");
+            let result = parse_color_function(test_str).expect("color string should be parseable");
             let output_format = result.to_output_format();
             if output_format != expected {
                 errors.push((test_str, expected, output_format));
